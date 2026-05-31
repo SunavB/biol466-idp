@@ -1,0 +1,6 @@
+data/*
+!data/.gitkeep
+*.pkl
+.ipynb_checkpoints/
+.DS_Store
+results/figures/*.png
