@@ -185,6 +185,54 @@ Binary sample sizes (positives = proteins with a d2o annotation; negatives = Dis
 
 **Status: Week 3 complete.** Ready for Week 4 (cleaning, GO Slim mapping, CD-HIT, EDA, go/no-go).
 
-### 2026-XX-XX — Week 4 execution + go/no-go
+### 2026-06-05 — Week 4 execution + go/no-go verdict
 
-*(to be populated)*
+**W4.1 — Experimental-evidence filter.** Restricted to experimental evidence codes (EXP, IDA, IPI, IMP, IGI, IEP, HTP, HDA, HMP, HGI, HEP). Result: **76,902 annotations** retained from 129,684 (59% retention). **Proteins with ≥1 experimental annotation: 1,266 / 1,279 (99.0%)**. Aspect distribution after filter — F 53,949 (70%), P 11,877 (15%), C 11,076 (14%) — MF dominates because human MF receives heavy IPI (protein-binding) experimental annotation, while BP got hit hardest by removing IBA (computational ortholog inference). Saved to `data/go_annotations_experimental.csv`.
+
+**W4.2 — GO Slim mapping.** Downloaded `go.obo` (36.7 MB, 41,552 terms) and `goslim_generic.obo` (206 terms). Mapped each annotation through `goatools.mapslim.mapslim`. Output matrices:
+
+- **BP**: 866 proteins × **64 slim terms**
+- **MF**: 1,014 proteins × **36 slim terms**
+- **CC**: 1,120 proteins × **25 slim terms**
+
+Per-aspect protein coverage variance reflects how experimental-evidence depth scales by aspect in human (CC > MF > BP). Saved as `features_GO_{BP,MF,CC}_slim.csv`.
+
+**W4.3 — Binary label audit.** Confirmed label distribution: **188 positives / 1,091 negatives (14.7%)**. Of the 188 positives, 179 have *only* "disorder to order" annotations; 9 also carry another transition type (mixed but still positive). D2o region length distribution across 299 annotated regions: median 26 aa, mean 53 aa, range 10–454 aa, **0 regions shorter than 5 residues**. Length range is consistent with the MoRF literature (typical MoRFs 10–70 residues).
+
+**W4.4 — CD-HIT sequence-redundancy filter.** Clustered at 40% identity (`-c 0.4 -n 2`). **1,168 distinct clusters from 1,279 proteins** in 14 s of CPU. Cluster size: mean 1.10, median 1, max 4 — overwhelmingly singletons, as expected for IDPs. **Decision logged:** Week-5 cross-validation will be **GroupKFold by cluster**, no cluster spans train/test in any fold.
+
+**W4.5 — Annotation-bias check.** Headline ratio for the proposal's limitations section:
+
+- **GO annotations per protein (n_go_exp): positive median 54.5 vs negative median 31.0 → 1.76× ratio**
+- Sequence length: positive median 475 vs negative median 484 → **0.98× (no length confound)**
+
+Saved figure `results/figures/annotation_bias.png`.
+
+**W4.6 — Comprehensive EDA.** Built `data/master_clean.csv` (1,279 × 7): acc, d2o, length, n_go_exp, cluster, n_dis_regions, total_dis_len. Four figures saved to `results/figures/`:
+
+- `eda_summary.png` — class distribution, length histogram by class, GO count vs length scatter, cluster-size histogram
+- `eda_go_slim_top20.png` — top-20 slim terms for each aspect
+- `eda_slim_per_protein.png` — slim-terms-per-protein distribution per aspect
+- `eda_disorder_profile.png` — n_dis_regions and total_dis_len boxplots by class
+
+**Top slim terms are biologically on point.** BP: regulation of transcription (GO:0006355) — IDPs are classical transcription regulators. MF: catalytic activity (GO:0003824). CC: organelle (GO:0043226).
+
+**Second annotation-richness confound surfaced.** Beyond the GO-count bias, positives also have more disorder overall: n_dis_regions ratio **1.50×** (median 3 vs 2), total_dis_len ratio **1.73×** (median 104 vs 60). Biologically expected (well-studied d2o proteins tend to be more thoroughly characterised for disorder), but this is a second confound to declare alongside the GO bias in the report's limitations.
+
+**W4.7 — Go/no-go verdict.** **All seven criteria PASS.** Recorded numerically:
+
+| Criterion | Threshold | Actual |
+|---|---|---|
+| 1. N sufficient | ≥150 pos, ≥500 neg | 188 / 1,091 |
+| 2. Positive rate near spike | 10–20% | 14.7% |
+| 3. Sequence coverage | ≥95% | 100.0% |
+| 4. GO coverage (experimental) | ≥70% | 99.0% |
+| 5. GO Slim non-degenerate | ≥20 cols, ≥10 useful | BP 64/54, MF 36/31, CC 25/25 |
+| 6. Positives span clusters | ≥50 | 182 |
+| 7. Annotation bias median ratio | <4× | 1.76× |
+
+**Verdict: GO — proceed to Week 5.**
+
+**W4.8 — Closing.** Lab notebook + proposal §5.1 updated to reflect the final filtered numbers (1,279 candidates, 188/1,091 split, 1,168 clusters). Commit will be tagged `week4-go-nogo`.
+
+**Status: Week 4 complete.** Modelling-ready dataset in `data/master_clean.csv`; three GO Slim feature matrices ready; cluster IDs ready for GroupKFold CV. Week 5 starts with ESM-2 embedding generation and the end-to-end thin-slice run.
