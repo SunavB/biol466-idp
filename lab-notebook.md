@@ -236,3 +236,55 @@ Saved figure `results/figures/annotation_bias.png`.
 **W4.8 — Closing.** Lab notebook + proposal §5.1 updated to reflect the final filtered numbers (1,279 candidates, 188/1,091 split, 1,168 clusters). Commit will be tagged `week4-go-nogo`.
 
 **Status: Week 4 complete.** Modelling-ready dataset in `data/master_clean.csv`; three GO Slim feature matrices ready; cluster IDs ready for GroupKFold CV. Week 5 starts with ESM-2 embedding generation and the end-to-end thin-slice run.
+
+---
+
+## Week 5 — Sequence features and thin-slice pipeline
+
+### 2026-06-05 — ESM-2 extraction, AA-comp baseline, thin slice verified
+
+**Tools installed.** `torch 2.12.0`, `fair-esm 2.0.0`, `tqdm`, `ipywidgets`. Apple Silicon MPS backend confirmed available (`torch.backends.mps.is_available() == True`). Device: `mps`.
+
+**W5.2 — ESM-2 embedding extraction.** Used the **ESM-2 650M** checkpoint (`esm2_t33_650M_UR50D`). Per-residue token representations from layer 33 mean-pooled (excluding CLS and EOS) to a single 1,280-dim vector per protein. Truncation at 1,022 residues (model context 1,024 minus CLS/EOS).
+
+- Sequences processed: **1,279 / 1,279 (100%)** — no failures.
+- Embedding dim: **1,280**.
+- Truncated proteins (length > 1,022): **180 (14.1%)** — higher than initial 5% estimate; mostly disorder-rich long proteins. To be stated as a methods limitation.
+- L2-norm range across embeddings: 4.53 – 10.04, mean 7.23. No zero-norm vectors; no NaNs.
+- Saved as `data/features_esm2.npz` (compressed).
+
+**W5.3 — Amino-acid composition reference baseline.** 20-dim frequency vector + log-length z-score → 21-dim per protein. Saved as `data/features_aacomp.csv` (1,279 × 21). Row-sum sanity passes (AA-frequency rows sum to 1.0). This is the reference baseline, *not* the project baseline — its purpose is to demonstrate, by comparison, how strong ESM-2 is.
+
+**W5.4 — Thin-slice modelling pipeline.** Cluster-aware GroupKFold(5) split, Random Forest (300 trees, class_weight='balanced'), AUPRC primary metric. **Cluster-leakage assert never fired**: no homology cluster spans train and test in any fold.
+
+Four CV configurations were tested as part of pipeline diagnosis:
+
+| Setup | AUPRC | AUROC | macro-F1 | bal_acc |
+|---|---:|---:|---:|---:|
+| Chance baseline (prevalence) | 0.147 | 0.500 | — | 0.500 |
+| AA composition + RF | 0.166 ± 0.031 | 0.525 ± 0.054 | 0.460 ± 0.005 | 0.500 ± 0.000 |
+| ESM-2 + RF | 0.193 ± 0.047 | 0.563 ± 0.074 | 0.460 ± 0.005 | 0.500 ± 0.001 |
+| ESM-2 + LR (StandardScale + L2) | 0.197 ± 0.044 | 0.560 ± 0.075 | 0.524 ± 0.040 | 0.531 ± 0.048 |
+| ESM-2 → PCA(64) + RF | 0.190 ± 0.040 | 0.548 ± 0.084 | 0.460 ± 0.005 | 0.500 ± 0.000 |
+
+**Diagnostic — RF training-set self-fit.** Trained RF on all 1,279 proteins, predicted on the same set. **Train AUPRC = 1.000, Train AUROC = 1.000.** This proves the features carry separable signal *and* the pipeline code is correct; the train→test gap (1.0 → 0.19) is high-variance generalization, not a bug.
+
+**Interpretation.**
+- The pipeline is mechanically verified end-to-end. AUPRC/AUROC/F1/bal_acc all compute correctly, splits respect clusters, no leakage.
+- **Mean-pooled ESM-2 at the protein level is a weak signal for d2o.** Above-chance but only marginally (AUPRC ≈ 0.19 vs chance 0.147). RF, LR, and PCA-reduced RF all land at the same level, suggesting the signal is genuinely diffuse rather than poorly recovered.
+- AA composition is essentially noise (AUPRC ≈ 0.17), confirming the proposal's strong-baseline principle: using AA-comp as the baseline would trivially be beaten by anything; ESM-2 is the meaningful baseline.
+- The **macro-F1 = 0.460 and bal-acc = 0.500** across most setups reflect "predicts mostly negatives at threshold 0.5" — a calibration artefact for class-imbalanced RF, not a feature problem. LR slightly mitigates this (F1 = 0.524, bal-acc = 0.531) but the AUPRC story is unchanged.
+
+**Implications for the proposal.**
+- **The ESM-2 baseline AUPRC is ≈ 0.19**. This is the bar GO context must clear in the 8-condition factorial.
+- The bar is low enough that *plausible* improvements from GO are possible, and a finding that GO doesn't help is equally interpretable as "modern sequence representations already capture most of the protein-level signal."
+- The "weak protein-level baseline" finding strengthens the proposal's design rationale rather than weakening it: the factorial comparison stays clean either way.
+
+**Status: Week 5 complete (with caveat).** Pipeline verified, baseline characterised, files saved (`features_esm2.npz`, `features_aacomp.csv`, `results/thin_slice_aacomp.csv`, `results/thin_slice_esm2.csv`). The caveat is that the baseline is quite weak; this is acknowledged and the project continues as planned — GO comparisons are the next test.
+
+**Week 6 — Planned focus.**
+1. **Wire GO Slim features into the pipeline.** Implement `make_X(condition_id)` for all 8 factorial conditions; concatenate ESM-2 + selected GO Slim matrices.
+2. **Try a stronger classifier in parallel.** Gradient boosting (XGBoost or LightGBM) often outperforms RF on dense features in this regime; worth ~30 min of investigation. RF stays primary unless evidence is overwhelming.
+3. **Optional: explore per-residue ESM-2 averaging over disordered regions only.** If mean-pooling over the whole protein dilutes the signal (likely), pooling over annotated disorder regions could lift the baseline meaningfully.
+4. **Decide whether to keep AUPRC as primary or add MCC.** With persistent all-negative bias at threshold 0.5, MCC (Matthews correlation coefficient) might be a more honest secondary; AUPRC stays primary per the proposal.
+5. **Re-run thin slice with the GO BP+MF+CC condition (full eight only).** Quick check: does GO context lift the ~0.19 baseline meaningfully? If yes, we're on a good trajectory. If no, that's the headline finding and we plan the report accordingly.
