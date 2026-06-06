@@ -288,3 +288,84 @@ Four CV configurations were tested as part of pipeline diagnosis:
 3. **Optional: explore per-residue ESM-2 averaging over disordered regions only.** If mean-pooling over the whole protein dilutes the signal (likely), pooling over annotated disorder regions could lift the baseline meaningfully.
 4. **Decide whether to keep AUPRC as primary or add MCC.** With persistent all-negative bias at threshold 0.5, MCC (Matthews correlation coefficient) might be a more honest secondary; AUPRC stays primary per the proposal.
 5. **Re-run thin slice with the GO BP+MF+CC condition (full eight only).** Quick check: does GO context lift the ~0.19 baseline meaningfully? If yes, we're on a good trajectory. If no, that's the headline finding and we plan the report accordingly.
+
+---
+
+## Week 6 — The 8-condition factorial (main experimental result)
+
+### 2026-06-05 — Factorial run, statistical analysis, null finding confirmed, Path II routing
+
+**W6.1 — `make_X(condition_id)` builder.** Implemented a bit-encoded condition table (BP/MF/CC each on/off) with a single function returning the concatenated ESM-2 + GO Slim feature matrix for any of the 8 factorial conditions. Verified dimensions: Condition 1 (Seq only) = 1,280; Condition 8 (all GO) = 1,280 + 64 + 36 + 25 = **1,405**. All other conditions land between as expected.
+
+**Final modelling set:** 1,279 proteins (188 positives, 14.7%), 1,168 CD-HIT clusters at 40% identity. Threshold = 0.147 (prevalence) to avoid the W5 all-negative-at-0.5 artefact.
+
+**Cross-validation:** GroupKFold(5), splits predefined once and shared across all 8 conditions for valid paired-fold comparisons. Cluster leakage assert passes in every fold.
+
+**W6.2 — RF factorial.** All eight conditions run with the same Random Forest (500 trees, `class_weight='balanced'`, `min_samples_leaf=3`). Aggregate AUPRC (mean ± std over 5 folds):
+
+| Condition | Label | AUPRC | AUROC | MCC |
+|---|---|---:|---:|---:|
+| 1 | Seq only | 0.199 ± 0.058 | 0.579 | 0.092 |
+| 2 | Seq + BP | 0.189 ± 0.042 | 0.570 | 0.085 |
+| 3 | Seq + MF | 0.200 ± 0.047 | 0.587 | 0.098 |
+| 4 | Seq + CC | 0.194 ± 0.057 | 0.577 | 0.107 |
+| 5 | Seq + BP + MF | 0.203 ± 0.053 | 0.580 | 0.074 |
+| 6 | Seq + BP + CC | 0.205 ± 0.049 | 0.584 | 0.097 |
+| 7 | Seq + MF + CC | 0.193 ± 0.056 | 0.581 | 0.081 |
+| 8 | Seq + BP + MF + CC | 0.191 ± 0.050 | 0.574 | 0.065 |
+
+All conditions land in the 0.189–0.205 band; baseline (0.199) sits in the middle of the pack. Notably the fully-augmented condition 8 is slightly *below* baseline. The error bars (±0.05) overlap massively across all bars. Saved per-fold scores to `results/factorial_rf_per_fold.csv` and a bar chart to `results/figures/factorial_rf_auprc.png`.
+
+**Fold structure dominates condition effects.** Across every condition: fold 4 lands at AUPRC 0.25–0.30, fold 2 at 0.14–0.16. The fold-to-fold variance is roughly equal to the largest between-condition difference, confirming that any feature-set effect is below noise. Plausibly fold 4's test split happens to contain more annotation-rich, easier-to-predict proteins (consistent with the 1.76× annotation-richness bias in positives from W4.5).
+
+**W6.3 — Pairwise stats + factorial effects.** Paired Wilcoxon signed-rank against condition 1, BH-corrected:
+
+| Condition | mean Δ vs Seq | CI95 | p_BH |
+|---|---:|---|---:|
+| Seq + BP | −0.010 | [−0.028, +0.002] | 0.94 |
+| Seq + MF | +0.000 | [−0.011, +0.009] | 0.73 |
+| Seq + CC | −0.005 | [−0.012, +0.003] | 0.94 |
+| Seq + BP + MF | +0.004 | [−0.002, +0.008] | 0.73 |
+| Seq + BP + CC | +0.006 | [−0.004, +0.015] | 0.73 |
+| Seq + MF + CC | −0.006 | [−0.015, +0.004] | 0.94 |
+| Seq + BP + MF + CC | −0.008 | [−0.017, −0.000] | 0.94 |
+
+**Main effects on AUPRC** (averaged over all conditions with vs without each aspect):
+- BP: **+0.0006**
+- MF: **−0.0004**
+- CC: **−0.0017**
+
+**Interaction effects:**
+- BP × MF: −0.0001
+- BP × CC: +0.0079
+- MF × CC: −0.0147
+
+Saved as `results/factorial_rf_stats.csv`.
+
+**W6.4 — XGBoost robustness check.** Same 8 conditions, same shared CV splits, XGBoost (500 trees, depth 6, lr 0.05, `scale_pos_weight` for class imbalance) replacing RF. Mean AUPRC by condition: 0.197, 0.202, 0.197, 0.198, 0.193, 0.210, 0.195, 0.207. Same null pattern. Average XGB-vs-RF delta across conditions: +0.003, well below the +0.03 threshold we set for considering a classifier change. **Decision: RF stays primary as pre-registered.** Saved per-fold scores to `results/factorial_xgb_per_fold.csv`.
+
+**Hypothesis verdicts (Week-6 cut):**
+
+- **H1 (main effect of GO context) — FALSIFIED.** No pairwise comparison reaches BH-corrected significance (best p_BH = 0.73). Effect sizes are uniformly tiny (largest +0.006 AUPRC). The full-GO condition 8 is mildly worse than baseline (CI [−0.017, 0]), consistent with noise injection from adding ineffective features. **Null hypothesis cannot be rejected.**
+- **H2 (MF most informative) — FALSIFIED.** Main-effect ranking is BP (+0.0006) > MF (−0.0004) > CC (−0.0017). MF is second, not first. All three effects are effectively zero, so the ordering is noise and the directional prediction fails.
+- **H3 (sub-additive interaction) — NOT INTERPRETABLE.** Interactions (−0.0001, +0.008, −0.015) are tiny and there are no main effects for them to interact around. The hypothesis is moot when the underlying effects are zero.
+- **H4 (stratification) — NOT TESTED YET.** Reserved for Week 7.
+
+**Headline interpretation.** This is the *informative null* the proposal explicitly anticipated (§6: "It is a genuine and informative possibility that a modern sequence representation already captures most of the available signal, leaving little for GO context to add."). Modern ESM-2 protein-level mean-pooled embeddings appear to already encode the protein-level signal relevant to coupled folding-and-binding prediction; concatenating GO Slim features adds no measurable benefit at this representation. Result is robust across RF and XGBoost.
+
+**W6.5 — Week-7 routing: Path II selected.** The null at protein-level mean-pooled representation needs one further test before the report locks the finding in: per-residue ESM-2 averaged over **annotated disordered regions only** (using DisProt region coordinates). Rationale: MoRFs are 10–70 residues; mean-pooling over a 500-residue protein could be diluting the local signal that GO context might rescue. If GO still shows no effect under that finer representation, the null is robust and becomes the headline of the report. If GO suddenly helps, that is itself a methodological finding worth its own discussion.
+
+**Week 7 plan (preview):**
+1. Build a per-residue ESM-2 representation pooled over DisProt-annotated disordered regions only. Re-run the 8-condition factorial with this representation.
+2. Run the **label-shuffling negative control** for the protein-level setup — shuffle d2o labels across proteins, rerun the factorial. AUPRC should drop to ≈ 0.147 (chance) across all conditions. Confirms results aren't a methodology artefact.
+3. **Stratified analysis for H4** — partition test proteins by Seq-only baseline AUPRC tertile and measure GO contribution within each tertile.
+4. **Feature-importance interpretation** for the protein-level setup — which GO Slim terms RF deems most useful, even though the lift is null overall, to characterise what the GO features were "trying" to contribute.
+5. Begin drafting the Methods section of the report.
+
+**Status: Week 6 complete.** Main experimental result is the informative null: GO Slim features over a strong ESM-2 mean-pooled baseline do not improve protein-level disorder-to-order prediction. RF stays as the primary classifier. Path II confirmed for Week 7's robustness work.
+
+**Files saved this week:**
+- `results/factorial_rf_per_fold.csv`
+- `results/factorial_rf_stats.csv`
+- `results/factorial_xgb_per_fold.csv`
+- `results/figures/factorial_rf_auprc.png`
