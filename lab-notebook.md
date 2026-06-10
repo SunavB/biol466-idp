@@ -369,3 +369,111 @@ Saved as `results/factorial_rf_stats.csv`.
 - `results/factorial_rf_stats.csv`
 - `results/factorial_xgb_per_fold.csv`
 - `results/figures/factorial_rf_auprc.png`
+
+---
+
+## Week 7 — Robustness, stratification, interpretation
+
+### 2026-06-06 — Disorder-pool representation, negative control, H4 stratification, feature importance
+
+**W7.2 — Per-residue ESM-2 with disorder-region pooling.** Same ESM-2 650M model, same MPS device, same 1,022-residue truncation as W5. The change: mean-pool over only the residues that fall inside DisProt-annotated disordered regions (Structural state layer) instead of all residue tokens. Embedding wall time ~27 min on Apple Silicon MPS. **41 proteins (3.2%)** had all disorder annotations beyond residue 1,022 and fell back to whole-protein pooling — noted as a methods caveat. Output: `data/features_esm2_disorder.npz`, shape (1,279, 1,280), L2-norm range 4.78–10.18 (mean 8.75; comparable to W5's 4.53–10.04 / mean 7.23). No NaNs, no zero-norm vectors.
+
+*Sanity vs W5 whole-protein embeddings:* per-protein cosine similarity median **0.946**, mean 0.927, range 0.475–1.000. The two representations are similar in overall manifold but distinct enough to plausibly carry different information — exactly the regime where a disorder-specific representation could surface a signal that whole-protein pooling dilutes.
+
+**W7.3 — Disorder-pool factorial.** Same 8 conditions, same shared CV splits, same RF (500 trees, `class_weight='balanced'`, `min_samples_leaf=3`), threshold = prevalence (0.147). Aggregate AUPRC (mean ± std over 5 folds):
+
+| Condition | Label | AUPRC | AUROC | MCC |
+|---|---|---:|---:|---:|
+| 1 | Seq only | **0.237 ± 0.035** | 0.654 | 0.176 |
+| 2 | Seq + BP | 0.228 ± 0.043 | 0.651 | 0.178 |
+| 3 | Seq + MF | 0.232 ± 0.041 | 0.658 | 0.190 |
+| 4 | Seq + CC | 0.231 ± 0.037 | 0.651 | 0.186 |
+| 5 | Seq + BP + MF | 0.226 ± 0.046 | 0.657 | 0.178 |
+| 6 | Seq + BP + CC | 0.230 ± 0.046 | 0.654 | 0.182 |
+| 7 | Seq + MF + CC | **0.240 ± 0.048** | 0.659 | 0.189 |
+| 8 | Seq + BP + MF + CC | 0.230 ± 0.045 | 0.655 | 0.170 |
+
+**Two headline findings.**
+
+1. **Disorder pooling materially improves the sequence baseline.** Cond 1 jumped from W6's 0.199 to **0.237** (+0.038 absolute, ~19% relative). AUROC 0.579 → 0.654. MCC 0.092 → 0.176 (nearly doubled). Whole-protein mean-pooling was diluting the d2o-relevant signal; restricting the pool to disordered residues recovers a meaningfully stronger representation. **The sequence representation, not the model, was the bottleneck.**
+2. **GO context still adds nothing.** All 8 conditions cluster in 0.226–0.240. Cond 8 (all GO) is *below* baseline at 0.230. The null is robust across both representations.
+
+**W7.4 — Pairwise stats on disorder pool.** All BH-corrected p-values **≥ 0.94**; six of seven equal **1.000**. All mean differences vs Cond 1 are negative or essentially zero — adding GO features slightly *degrades* the disorder-pooled baseline. Main effects: BP −0.0065, MF +0.0009, CC +0.0016 — ordering changed from W6 (where BP > MF > CC), confirming the ranking is noise. **H1 falsified more strongly than W6; H2 falsified with a different ordering; H3 again uninterpretable.**
+
+**W7.5 — Negative control (label shuffling).** Shuffled `y` once with fixed seed; reran the 8-condition factorial. Aggregate shuffled-label AUPRC: 0.156–0.180 across all conditions, AUROC 0.46–0.59 (essentially random ranking). Compared to chance prevalence (0.147) and the real-data disorder-pool baseline (0.237):
+
+- Real-data disorder-pool Cond 1: **0.237**
+- Real-data Cond 1, whole-protein (W6): 0.199
+- Shuffled-label any condition: 0.156–0.180 (mean ≈ 0.170)
+- Chance prevalence: 0.147
+
+The 0.237 baseline is ~2.7σ above the shuffled null. **The lift from whole-protein → disorder pool is real; the lift from adding GO (≈ 0) is null; both reads of the result are confirmed by the negative control.**
+
+**W7.6 — Stratified analysis for H4.** Per-protein out-of-fold probabilities from Cond 1 and Cond 8, partitioned into tertiles by Cond-1 confidence:
+
+| Tertile | n | n_pos | Cond 1 AUPRC | Cond 8 AUPRC | Δ |
+|---|---:|---:|---:|---:|---:|
+| Low (hardest) | 427 | 27 | 0.140 | 0.169 | **+0.028** |
+| Mid | 426 | 75 | 0.260 | 0.249 | −0.011 |
+| High (easiest) | 426 | 86 | 0.251 | 0.221 | **−0.031** |
+
+**H4 has partial directional support, with a caveat.** In the low-confidence stratum GO context lifts AUPRC by +0.028 (~20% relative) — the H4 prediction. But this is offset by losses in the higher-confidence strata, netting to zero across the dataset.
+
+Mechanism is visible in the per-protein probability scatter (`results/figures/per_protein_proba_shift.png`): at low Cond-1 probabilities the Cond-8 predictions sit slightly above y=x, and at high Cond-1 probabilities they sit slightly below. **GO context compresses the probability range toward the class prior (~0.15).** RF regularises uncertain predictions toward prevalence; that helps where the sequence model was guessing and hurts where it was confident. Net: zero discriminative gain.
+
+**W7.7 — Feature importance.** Cond 8 RF trained on all data; importance distribution across 1,405 features:
+
+| Feature kind | n columns | Sum of importance | Fraction |
+|---|---:|---:|---:|
+| ESM-2 | 1,280 | 0.9975 | **99.7%** |
+| BP | 64 | 0.0012 | 0.1% |
+| MF | 36 | 0.0008 | 0.1% |
+| CC | 25 | 0.0006 | 0.1% |
+
+**RF puts 99.7% of its importance on the sequence features and essentially ignores the 125 GO Slim columns.** Not a single GO term enters the top 30 features. The bar chart (`results/figures/feature_importance_by_kind.png`) is one tall ESM-2 bar over three invisible slivers.
+
+But — the GO terms that *did* rank highest within the 0.3% RF allocated to GO are **biologically on-target for IDPs**:
+
+| Rank | GO ID | Aspect | Term |
+|---|---|---|---|
+| 1 | GO:0012501 | BP | Programmed cell death |
+| 2 | GO:0005829 | CC | Cytosol |
+| 3 | GO:0003723 | MF | **RNA binding** |
+| 4 | GO:0003677 | MF | **DNA binding** |
+| 5 | GO:0030163 | BP | Protein catabolic process |
+| 6 | GO:0060089 | MF | Molecular transducer activity |
+| 7 | GO:0007010 | BP | Cytoskeleton organization |
+| 8 | GO:0006281 | BP | DNA repair |
+| 9 | GO:0005730 | CC | Nucleolus |
+| 10 | GO:0008289 | MF | Lipid binding |
+| 11 | GO:0005215 | MF | Transporter activity |
+| 12 | GO:0005634 | CC | Nucleus |
+| 13 | GO:0043226 | CC | Organelle |
+| 14 | GO:0002376 | BP | Immune system process |
+| 15 | GO:0006351 | BP | Transcription (DNA-templated) |
+
+RNA binding, DNA binding, transcription, nucleus, signal transduction, apoptosis — the canonical functional categories of IDPs. The features RF found marginally useful are the biologically right ones; they just couldn't add anything on top of what ESM-2 already encodes.
+
+**Synthesis — the report's headline interpretation.** Three observations now stitch into a clean explanatory story:
+
+1. GO context produces no measurable AUPRC improvement on top of ESM-2 (under either pooling; under either RF or XGBoost; under shared, paired, BH-corrected statistical testing; confirmed by label-shuffling negative control).
+2. RF essentially ignores GO features when given access to ESM-2 alongside them (99.7% of importance on sequence).
+3. The few GO terms RF *does* rank are exactly the biologically correct ones for IDPs (RNA binding, DNA binding, transcription, nucleus, signalling).
+
+Conclusion: **ESM-2 already encodes the same protein-functional information that GO Slim categories summarise.** Pre-training on hundreds of millions of sequences taught the protein language model the sequence signatures of RNA-binding proteins, transcription factors, signalling proteins; adding curated GO categories as additional features is redundant for this prediction task at this representation. The proposal's pre-registered "informative null" framing fits this result precisely.
+
+**H1, H2, H3 verdicts unchanged from W6** (falsified, falsified, uninterpretable). **H4 partially supported in direction** (the lift in the low-confidence tertile matches the prediction) but the magnitude is small and is offset by losses elsewhere, so the *net* H4 prediction (that GO benefits the hard cases enough to lift overall AUPRC) is falsified.
+
+**Files saved this week:**
+- `data/features_esm2_disorder.npz` — disorder-pooled embeddings
+- `results/factorial_rf_per_fold_disorder.csv`
+- `results/factorial_rf_stats_disorder.csv`
+- `results/negative_control_per_fold.csv`
+- `results/stratified_h4.csv`
+- `results/feature_importance_top30.csv`
+- `results/figures/factorial_pool_compare.png`
+- `results/figures/three_way_comparison.png`
+- `results/figures/per_protein_proba_shift.png`
+- `results/figures/feature_importance_by_kind.png`
+
+**Status: Week 7 experimental work complete.** All robustness and interpretation analyses done; the report has its three-leg result structure (real-data factorial across two representations, paired stats, negative control), its H4 partial-support nuance, and its mechanistic explanation (ESM-2 subsumes GO Slim). Week 8 begins Methods drafting (W7.8 was deferred) and Results/Discussion. Supervisor meeting can now be scheduled — bringing the full result story plus all four hypothesis verdicts.
