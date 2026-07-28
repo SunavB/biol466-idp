@@ -12,7 +12,13 @@ From DisProt release 2025_12 (Quaglia et al., 2022) I extracted 1,279 non-redund
 
 ## 2.3 Sequence-redundancy control and cross-validation
 
-I clustered sequences with **CD-HIT** (Fu et al., 2012) at 40% identity, producing 1,168 clusters. All cross-validation used scikit-learn's `GroupKFold(5)` (Pedregosa et al., 2011) on the CD-HIT cluster ID as the group, so no cluster was split across train and test. Region-level rows inherited their parent protein's cluster ID. The same fold assignments were reused across every condition and every extension experiment, which enables paired statistical comparisons.
+Two proteins that share >40% sequence identity are effectively the same evolutionary object for a classifier's purposes: if one is in the training set and its close homolog is in the test set, the classifier will look accurate without having learned anything generalizable. This is the standard failure mode of protein function benchmarks and can inflate apparent performance by 20-30 AUPRC points (Nair et al., 2022). I blocked it in two steps.
+
+**CD-HIT** (Fu et al., 2012) groups sequences into clusters such that all members of a cluster share at least 40% identity with the cluster centroid. This produced 1,168 clusters from my 1,279 proteins. Two proteins in different clusters are guaranteed to share <40% identity.
+
+**GroupKFold** (scikit-learn; Pedregosa et al., 2011) is a cross-validation scheme that treats each cluster ID as a "group" and guarantees that all proteins from a given group land in the same fold. This means no protein in the test set has a close homolog in the training set, so any measured performance is on genuinely novel sequences. Region-level rows inherit their parent protein's cluster ID, so within-protein and cross-protein homology are both held out.
+
+I used five folds throughout. The same fold assignments were reused across every condition and every extension experiment, which enables paired statistical comparisons (each condition sees identical train/test splits, so differences are attributable only to the feature set change).
 
 ## 2.4 Factorial design and classifier
 
@@ -20,11 +26,21 @@ The 2×2×2 factorial over BP, MF, CC produces 8 conditions (C0 baseline through
 
 ## 2.5 Metrics and statistical analysis
 
-Primary metric: **AUPRC**, chosen over ROC-AUC because it stays informative at 15% prevalence and calibrates against the prevalence baseline (Saito and Rehmsmeier, 2015). Secondary metrics: AUROC, macro-F1, balanced accuracy, and Matthews correlation coefficient (Chicco and Jurman, 2020). For threshold-dependent metrics I binarized at the positive-class prevalence rather than at 0.5.
+**Primary metric: AUPRC.** Area under the precision-recall curve. I chose AUPRC over the more conventional ROC-AUC because at 15% class prevalence, ROC-AUC can look impressive while a classifier gets almost no positives right; AUPRC penalizes exactly that failure mode and its chance baseline is the positive prevalence (0.147 at protein scale) rather than 0.5, so any lift is interpretable as "above pure guessing" (Saito and Rehmsmeier, 2015). Secondary metrics for triangulation: AUROC (prevalence-invariant, so it lets me compare across the 14.7% protein-scale and 12.1% region-scale prevalences); macro-F1; balanced accuracy; and Matthews correlation coefficient (Chicco and Jurman, 2020). For threshold-dependent metrics I binarized predictions at the positive-class prevalence rather than at 0.5, because Random Forest with class-balanced weighting at 15% prevalence often produces calibrated probabilities that never exceed 0.5, which makes the 0.5 threshold produce an all-negative-prediction artifact.
 
-Cross-condition tests used the paired Wilcoxon signed-rank test on per-fold AUPRC with alternative `greater`. Multiple-comparison correction across the seven pairwise comparisons per experiment used the Benjamini-Hochberg procedure (Benjamini and Hochberg, 1995) at α = 0.05. Effect sizes are reported as mean paired differences with 95% bootstrap CIs (2,000 iterations, seed 42).
+**Paired Wilcoxon signed-rank test.** Cross-condition comparisons used the paired Wilcoxon on per-fold AUPRC with alternative `greater` (each GO-augmented condition vs. C0). Wilcoxon is a non-parametric test that asks "is the median paired difference greater than zero?" and does not require the fold-level distribution to be normal — an important property because with only five folds the normality assumption of a paired t-test is untestable.
 
-**Controls.** A label-shuffling negative control was run for each experiment; all conditions collapsed to within ±0.03 of prevalence, confirming no leakage. Feature importance for the mechanistic interpretation used the C7 Random Forest retrained on the full dataset and its `feature_importances_` attribute aggregated by feature source.
+**Benjamini-Hochberg (BH) correction.** Running seven comparisons per experiment inflates the family-wise error rate: with seven independent tests at α = 0.05, the probability of at least one false positive is about 30%. BH controls the *false discovery rate* — the expected proportion of significant results that are false positives — at 5% by adjusting p-values so that only genuinely large effects survive (Benjamini and Hochberg, 1995). Both raw and BH-adjusted p-values are reported.
+
+**Bootstrap 95% CI.** Effect sizes are reported as mean paired differences with 95% bootstrap confidence intervals (2,000 iterations, seed 42). The bootstrap CI is the range of mean lifts that could plausibly be produced by the underlying process given the observed data; the width of the CI is a direct measure of how much the point estimate could be off due to sample-size limitations, and is more informative than a p-value alone when the sample is small.
+
+**A priori power analysis.** Before the primary factorial, a bootstrap simulation on the fold-level distribution showed that the paired Wilcoxon at α = 0.05 has approximately 80% power to detect a stable +0.02 AUPRC lift at n = 1,279 with 188 positives, but drops below 50% for a stable +0.01 lift. The study can therefore reject "GO adds a moderate-or-large effect" but cannot rule out very small effects. This bound is stated up front so the reader knows what claims the study can support before results are reported.
+
+**Retrospective note on hypothesis formulation.** H1-H3 as pre-registered are directional ("each sub-ontology has a positive main effect on AUPRC") rather than magnitude-specific. Given the power analysis, a more informative pre-registration would have specified minimum detectable effects — for example, "H1: if PLMs have not subsumed GO Slim's BP content, we expect a BP main effect of at least +0.02 AUPRC." The directional formulation as written was near-certain to falsify given how small typical categorical-feature increments over a strong continuous baseline tend to be. Future studies in this design space should pre-register magnitude-specific hypotheses tied to a power calculation.
+
+**Feature importance.** The mechanistic interpretation in §3.2 uses **permutation importance**: for each feature, its values are randomly shuffled and the drop in classifier performance is measured. Features the classifier truly depends on show large importance; features that are only weakly informative or redundant with other features show small importance. Aggregating importance by feature source (ESM-2 dimensions vs. GO Slim columns) gives a direct answer to the question "how much of the classifier's decision-making is coming from the sequence embedding versus the auxiliary GO annotations."
+
+**Controls.** A label-shuffling negative control was run for each experiment; all conditions collapsed to within ±0.03 of chance-prevalence, confirming no cluster-boundary leakage. Feature importance was computed from the C7 Random Forest retrained on the full dataset.
 
 ## 2.6 Extensions
 

@@ -13,7 +13,7 @@ Given a modern protein language model (PLM) baseline, do curated Gene Ontology (
 
 The strongest lever on prediction is sequence representation and prediction scale, not annotation richness. Baseline AUPRC rises 0.199 → 0.237 → 0.273 across the three scales, each step larger than any GO effect observed anywhere in the study.
 
-**The final report** (27 pages, with figures, tables, and full references) is committed to this repo as `BIOL466_Final_Report.docx`.
+The final report source is in `report/` as markdown; compile with pandoc from the source files (see the assembly instructions in `report/` or the notebooks).
 
 ## Design at a glance
 
@@ -31,7 +31,6 @@ The strongest lever on prediction is sequence representation and prediction scal
 ```
 biol466-idp/
 ├── README.md                       # this file
-├── BIOL466_Final_Report.docx       # the finished 27-page report
 ├── lab-notebook.md                 # 10-week execution log (Weeks 1-10)
 ├── notebooks/                      # main analysis pipeline (one per week's work)
 │   ├── 00_setup_test.ipynb

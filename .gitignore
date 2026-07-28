@@ -12,3 +12,7 @@ __pycache__/
 # All data files (regenerate from notebooks or download from source)
 data/*
 !data/.gitkeep
+
+# Compiled report files (source .md files are in report/)
+*.docx
+*.pdf
