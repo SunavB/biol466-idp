@@ -477,3 +477,250 @@ Conclusion: **ESM-2 already encodes the same protein-functional information that
 - `results/figures/feature_importance_by_kind.png`
 
 **Status: Week 7 experimental work complete.** All robustness and interpretation analyses done; the report has its three-leg result structure (real-data factorial across two representations, paired stats, negative control), its H4 partial-support nuance, and its mechanistic explanation (ESM-2 subsumes GO Slim). Week 8 begins Methods drafting (W7.8 was deferred) and Results/Discussion. Supervisor meeting can now be scheduled — bringing the full result story plus all four hypothesis verdicts.
+
+---
+
+## Week 8 — Path B mini-experiment: modern PLM sanity check
+
+### 2026-06-07 — ProstT5 vs ESM-2 (disorder pool), Outcome C confirmed
+
+**Motivation.** After Week 7's null result across two ESM-2 pooling strategies (whole-protein and disorder-region), three alternative explanations for the null remained on the table: (a) signal is localised and pooling scale washes it out — the region-level path; (b) GO Slim is too coarse and the signal lives in higher-resolution GO features; (c) ESM-2 (2023) is insufficient as a "strong baseline," and a newer post-2024 PLM would give a stronger sequence representation against which GO's contribution could be measured differently. Week 8's Path B mini-experiment addresses (c) as the cheapest of the three tests.
+
+**Model choice: ProstT5 (Rostlab/ProstT5).** T5 encoder-decoder, 1.2B parameters, 1,024-dim embeddings. Structure-aware pre-training via AlphaFold-predicted structures — meaningfully different signal from ESM-2's pure masked-LM training on evolutionary sequence data. Chosen over ESM-C because ESM-C's Python package collides with the `fair-esm` install (same `import esm` namespace) that's still needed for W5/W7 reproducibility. ProstT5 sits on standard HuggingFace `transformers`, clean install.
+
+**Pre-registered decision rule (locked before running):**
+
+| Outcome | ProstT5 Cond 1 vs 0.237 | ProstT5 Cond 8 vs Cond 1 gap | Interpretation | Action |
+|---|---|---|---|---|
+| A | ≥ +0.03 | ≤ +0.02 | Baseline lifts, GO still null; null story strengthened | Move to region-level (Week 9) |
+| B | ≥ +0.03 | ≥ +0.03 | Baseline lifts, GO helps | Rerun full 8-condition factorial with ProstT5 |
+| C | ±0.02 | — | Representation isn't bottleneck | Move to region-level (Week 9) |
+
+**W8.1 — Setup.** `pip install transformers sentencepiece protobuf`. All dependencies clean. `KMP_DUPLICATE_LIB_OK=TRUE` in notebook top cell for the same reason as W7 (PyTorch/XGBoost libomp collision).
+
+**W8.2 — ProstT5 disorder-pooled embedding extraction.**
+
+- Checkpoint: `Rostlab/ProstT5`, 1,208.2M parameters.
+- Prefix `<AA2fold>` for sequence-only mode (skipping the structure-decoding path).
+- Same disorder-region pooling logic as W7.2 — per-residue T5-encoder tokens averaged only over residues inside DisProt-annotated disordered regions.
+- Same truncation policy (MAX_LEN = 1,022), same fallback-to-whole-protein rule.
+- Wall time: **4h 58min on MPS** (much slower than W7's 27 min for ESM-2: T5 encoder-decoder architecture + 2× parameter count).
+- Retrieval rate: **1,279 / 1,279 (100%)**. Fallbacks (no disorder in truncation window): **41 proteins** — identical to W7's ESM-2 disorder count, confirming the region-parsing logic is representation-independent.
+- Saved as `data/features_prostt5_disorder.npz`, shape (1,279, 1,024).
+- Sanity: L2 norms 1.85–6.54 (mean 4.01) — lower absolute scale than ESM-2's 4.78–10.18 (mean 8.75), which is a property of T5's encoder normalisation, not a signal difference (tree-based classifiers are scale-invariant).
+
+**W8.3 — Mini-factorial (Cond 1 and Cond 8 only).** Same shared CV splits as W7, same RF hyperparameters (500 trees, `class_weight='balanced'`, `min_samples_leaf=3`), same threshold (0.147). Aggregate over 5 folds:
+
+| Condition | AUPRC | AUROC | macro-F1 | MCC |
+|---|---:|---:|---:|---:|
+| 1 — Seq only (ProstT5) | **0.243 ± 0.050** | 0.648 ± 0.046 | 0.447 | 0.166 |
+| 8 — Seq + all GO (ProstT5) | **0.236 ± 0.051** | 0.648 ± 0.047 | 0.452 | 0.174 |
+
+**Comparison against W7 ESM-2 disorder pool:**
+
+| | Cond 1 (Seq only) | Cond 8 (Seq + all GO) |
+|---|---:|---:|
+| ESM-2 disorder pool (W7) | 0.237 | 0.230 |
+| ProstT5 disorder pool | 0.243 | 0.236 |
+| ProstT5 − ESM-2 | **+0.006** | **+0.006** |
+
+**Verdict against pre-registered rule: Outcome C — representation isn't the bottleneck.** The +0.006 lift is well within the ±0.02 noise band. A newer, larger (1.8× parameters), structure-aware protein language model produced essentially identical performance to ESM-2 at both conditions. Cond 8 remains slightly *below* Cond 1 (−0.007), replicating the W7 pattern that GO features add marginal noise without discriminative gain.
+
+**Per-fold structure identical to W7.** Fold 4 highest (0.309 Cond 1, 0.306 Cond 8), fold 2 lowest (0.184 Cond 1, 0.172 Cond 8). Fold-to-fold variance dominates any condition-level effect — same behaviour, same interpretation as W7.
+
+**Implications for the report and Week 9.**
+
+1. **The null generalises across PLM families.** The report's headline claim strengthens from "ESM-2 subsumes GO Slim" to "modern protein language models — encoder-only masked-LM (ESM-2) *and* encoder-decoder structure-aware (ProstT5) — both subsume GO Slim for protein-level d2o prediction." Cross-family robustness is publishable-flavour evidence.
+2. **The "GO adds noise, RF regularises toward prior" mechanism replicates** across representations. Cond 8 < Cond 1 in both models. Not an ESM-2-specific artefact.
+3. **Representation choice is not the null's cause.** Weeks 6, 7, and 8 have now ruled out: model class (RF, XGBoost), pooling strategy (whole-protein, disorder-region), and PLM family (encoder-only, encoder-decoder). One remaining alternative on the table: **pooling scale** — signal may be too localised for any per-protein representation to expose. That's what Week 9's region-level extension tests.
+4. **Path A (higher-resolution GO features) can be honestly relegated to Discussion "future work"** without further empirical testing — 1.8× larger model with 1024-dim output couldn't move the needle, so refining the GO side is unlikely to change the story when RF gives 99.7% of importance to sequence anyway.
+
+**Files saved this week:**
+- `data/features_prostt5_disorder.npz` — 1,279 × 1,024 ProstT5 embeddings
+- `results/prostt5_mini_per_fold.csv` — per-fold Cond 1 / Cond 8 scores
+
+**Status: Week 8 mini-experiment complete.** Outcome C locked. Path A retired to future work. Path R (region-level extension) begins Week 9 as the last empirical stress test of the null. If the null replicates at region-level, the report has a triple-robustness null across representation family, pooling strategy, and prediction scale — a strong project-grade result. Report writing (Methods draft) also begins in parallel next week.
+
+---
+
+## Week 9 — Region-level extension (Path R): triple-robustness null confirmed
+
+### 2026-06-08 — Region-level factorial, negative control, three-scale comparison
+
+**Motivation and pre-registered decision rule.** After Weeks 6–8 ruled out model class, pooling strategy, and PLM family as causes of the null, the last remaining alternative explanation on the table was that GO signal is too localised to be captured by any *per-protein* representation. Week 9 tests this directly by moving to a **per-region** representation: one row per DisProt Structural-state disorder region, with the region's own ESM-2 embedding as the sequence feature. Pre-registered decision rule: if all BH-corrected pairwise p-values ≥ 0.05, the null replicates at region scale → triple-robustness null across representation family, pooling strategy, and prediction scale.
+
+**W9.1 — Region-level dataset construction.** Every Structural-state disorder region in human DisProt becomes one row. Label rule (pre-registered before running): y = 1 if the region's residues overlap ≥ 50% with any IDPO:0000011 disorder-to-order annotation on the same protein. 0.5 chosen as the standard MoRF-region-inclusion threshold in the literature.
+
+- **3,231 disorder regions** across 1,279 proteins.
+- **378 positives / 2,853 negatives** — region-level prevalence **0.117** (lower than protein-level 0.147 because proteins with a d2o annotation typically have several disorder regions of which only one or two overlap the d2o).
+- Regions per protein: median 2.0, mean 2.53, max 38.
+- Cluster coverage: 100% (all 3,231 regions inherit a valid CD-HIT cluster ID from their protein).
+- **Proteins with at least one positive region: 163** (vs 188 at protein-level in W6/W7). 25-protein drop — those are proteins whose d2o annotation spans across a Structural-state region boundary or overlaps two smaller regions each at ~30–40%. Recovery = 87%; acceptable.
+- Median positive-region overlap fraction: **1.00** — for positives, d2o annotations typically cover the *entire* disorder region, confirming the 0.5 threshold is not near a boundary.
+
+**W9.2 — Per-region ESM-2 embedding extraction.** ESM-2 650M cached from W5. Loop *per protein* (compute per-residue embeddings once, ~1,278 protein forward passes), then pool *per region* via tensor slicing. Wall time **~18 min on MPS** (faster than W7's 27 min because per-region pooling is amortised inside the per-protein loop).
+
+- Output: `data/features_esm2_region.npz`, shape (3,231, 1,280).
+- L2 norms 4.77–10.24 (mean 8.82) — matches W7's disorder-pool distribution.
+- No NaNs, no zero-norm vectors, no missing region IDs.
+- **Truncation fallbacks: 178** (~5.5%) — regions whose start coordinate is beyond residue 1,022. For those, the embedding came from the truncated protein N-terminus rather than the region itself. Flagged as a methods limitation alongside W5's 14% protein-level truncation.
+
+**W9.3 — GO-fingerprint control (Control 1) subset.** Since GO Slim features are per-protein, a multi-region protein gets identical GO features across its rows — a fingerprinting risk. Control 1 restricts to proteins with only one disorder region, eliminating the confound by construction.
+
+- **Single-region-protein subset: 530 rows, 39 positives, 7.4% prevalence.** Genuinely underpowered (~8 positives per test fold at 5-fold CV).
+- **Pre-registered rule invoked: skip Control 1 since the main W9.4 factorial produced a null.** Control 1 would only have been essential to run if the main factorial showed a positive result requiring fingerprinting rule-out.
+- Interesting biological observation: single-region proteins have half the d2o prevalence of the full dataset (7.4% vs 11.7%). Multi-region flexible proteins are more likely signalling/scaffolding proteins that use coupled folding-and-binding. Discussion-section material.
+
+**W9.4 — 8-condition factorial at region level.** Same 8 conditions, same RF hyperparameters, same shared GroupKFold(5) CV splits (grouped by cluster ID inherited from `acc`), threshold = region prevalence (0.117). Aggregate over 5 folds:
+
+| Condition | Label | AUPRC | AUROC | macro-F1 | MCC |
+|---|---|---:|---:|---:|---:|
+| 1 | Seq only | 0.273 ± 0.128 | 0.706 | 0.489 | 0.185 |
+| 2 | Seq + BP | 0.273 ± 0.133 | 0.704 | 0.497 | 0.201 |
+| 3 | Seq + MF | 0.292 ± 0.149 | 0.714 | 0.494 | 0.196 |
+| 4 | Seq + CC | 0.297 ± 0.150 | 0.711 | 0.491 | 0.191 |
+| 5 | Seq + BP + MF | 0.261 ± 0.137 | 0.701 | 0.501 | 0.213 |
+| 6 | Seq + BP + CC | **0.313 ± 0.146** | 0.722 | 0.488 | 0.184 |
+| 7 | Seq + MF + CC | 0.273 ± 0.123 | 0.720 | 0.496 | 0.204 |
+| 8 | Seq + BP + MF + CC | 0.293 ± 0.144 | 0.707 | 0.491 | 0.193 |
+
+**Cond 1 AUPRC lifted from W7's 0.237 to 0.273** (+0.036 absolute, +0.036 above the prevalence-invariant W7 comparison). AUROC lifted from 0.654 → **0.706** — the biggest baseline improvement of any single change in the project. Per-region pooling captures meaningfully more discriminative signal than pooling over a protein's disorder regions averaged — the "signal is local" hypothesis is empirically supported for the *sequence* side.
+
+**Fold variance dominates any condition-level effect.** Per-fold AUPRC ranges from 0.13 to 0.47 within any single condition. The largest cross-condition delta (Cond 6 at +0.040) sits inside a per-fold noise band of ±0.13.
+
+**W9.5 — Paired stats + factorial effects.** Paired Wilcoxon signed-rank vs Cond 1, Benjamini-Hochberg corrected across 7 pairwise comparisons; bootstrap 95% CIs for mean differences.
+
+| Condition | Δ vs Seq | CI95 | p_raw | p_BH |
+|---|---:|---|---:|---:|
+| Seq + BP | +0.001 | [−0.028, +0.022] | 0.31 | 0.44 |
+| Seq + MF | +0.019 | [−0.005, +0.054] | 0.41 | 0.47 |
+| Seq + CC | +0.025 | [+0.003, +0.049] | 0.16 | 0.36 |
+| Seq + BP + MF | −0.012 | [−0.041, +0.018] | 0.84 | 0.84 |
+| **Seq + BP + CC** | **+0.040** | [+0.019, +0.064] | **0.031** | 0.22 |
+| Seq + MF + CC | +0.000 | [−0.014, +0.010] | 0.31 | 0.44 |
+| Seq + BP + MF + CC | +0.021 | [+0.001, +0.051] | 0.063 | 0.22 |
+
+**Verdict: null replicates.** No BH-corrected p reaches 0.05. Cond 6 (Seq + BP + CC) is the best-case condition with raw p = 0.031, but survives correction only at p_BH = 0.22.
+
+**Factorial main and interaction effects on AUPRC:**
+
+- Main BP: +0.0015
+- Main MF: −0.0093
+- Main CC: **+0.0194** (largest single main effect anywhere in the project)
+- Interaction BP × MF: −0.0134
+- Interaction BP × CC: **+0.0329** (largest interaction anywhere in the project)
+- Interaction MF × CC: −0.0255
+
+**The CC-at-region-scale nuance.** At protein scale (W6/W7), all three main effects were ≤ |0.007|. At region scale, CC's main effect is +0.019 and BP × CC is +0.033. These don't survive correction and shouldn't be over-claimed, but they are the *first place in the project* where any GO aspect shows a nominal directional lift. **Directional interpretation for the Discussion:** cellular-localisation context — which is protein-wide and therefore uninformative between two regions of the same protein at protein scale — becomes marginally more useful when the sequence features become sufficiently localised that the constant CC signal is no longer just noise dilution. Not enough to establish, but a mechanistically coherent observation.
+
+**W9.6 — Negative control (label shuffling).** Shuffled y once with fixed seed, reran the 8-condition factorial. Aggregate over 5 folds:
+
+| Condition | Shuffled AUPRC |
+|---|---:|
+| 1 — Seq only | 0.127 ± 0.016 |
+| 2 — Seq + BP | 0.127 ± 0.020 |
+| 3 — Seq + MF | 0.120 ± 0.015 |
+| 4 — Seq + CC | 0.129 ± 0.025 |
+| 5 — Seq + BP + MF | 0.120 ± 0.013 |
+| 6 — Seq + BP + CC | 0.123 ± 0.013 |
+| 7 — Seq + MF + CC | 0.119 ± 0.011 |
+| 8 — all GO | 0.124 ± 0.014 |
+
+Every condition collapses to within 0.006–0.012 of chance (region prevalence = 0.117). AUROC across all shuffled conditions hovers 0.46–0.58 (essentially random). **No leakage detected.** The 0.273 real-data baseline sits +0.146 above the shuffled null — a genuine 2.3× lift over pure noise. Even Cond 6's borderline +0.040 real-data effect is not driven by leakage, since Cond 6 also collapses to 0.123 under shuffled labels.
+
+**W9.7 — Three-scale comparison figure.** `results/figures/region_vs_protein_scale_compare.png`. Three lines stacked:
+
+- Grey (W6 whole-protein, prev 0.147): AUPRC 0.189–0.205 across conditions
+- Green (W7 disorder-region pool, prev 0.147): AUPRC 0.226–0.240
+- Purple (W9 region-level, prev 0.117): AUPRC 0.261–0.313
+
+**Flat across the x-axis, stacked vertically.** The flatness is the null across all three scales; the vertical stacking is the pooling-scale effect on the sequence side. This is the single figure that anchors the Results section of the report.
+
+**Hypothesis verdicts consolidated across all weeks:**
+
+- **H1 (main effect of GO context) — FALSIFIED.** Null holds across all three pooling scales (W6, W7, W9), two PLMs (ESM-2, ProstT5), two classifiers (RF, XGBoost). Best-case pairwise BH-p is 0.22 (Cond 6 region-level).
+- **H2 (MF most informative) — FALSIFIED across three scales.** Ordering flips between scales: W6 BP > MF > CC; W7 CC > MF > BP; W9 CC > BP > MF. CC-at-region-scale is directionally interesting but not statistically supported.
+- **H3 (sub-additive interaction) — NOT INTERPRETABLE.** BP × CC at +0.033 is the largest interaction seen, but the main effects it interacts around are still zero at conventional significance.
+- **H4 (stratification) — partially supported at protein scale (W7.6, +0.028 in low-confidence tertile); not re-tested at region scale since region-level result is null.**
+
+**Combined "triple-robustness null":** across representation family (ESM-2 encoder-only, ProstT5 encoder-decoder), pooling strategy (whole-protein, disorder-region, per-region), and prediction scale (protein-level, region-level), Gene Ontology Slim context does not produce a statistically significant AUPRC improvement over a sequence-only ESM-2 baseline for coupled folding-and-binding prediction. This is now the report's headline claim, with unusually strong evidentiary support for a null result.
+
+**Files saved this week:**
+- `data/regions_master.csv` — 3,231-row region-level table
+- `data/regions_single_region.csv` — Control 1 subset (unused)
+- `data/features_esm2_region.npz` — 3,231 × 1,280 per-region ESM-2 embeddings
+- `results/region_factorial_rf_per_fold.csv`
+- `results/region_factorial_rf_stats.csv`
+- `results/region_negative_control_per_fold.csv`
+- `results/figures/region_vs_protein_scale_compare.png`
+
+**Status: Week 9 experimental work complete.** All planned experiments (Weeks 5–9 across protein-level, disorder-pool, ProstT5, region-level) plus their statistical machinery, negative controls, and comparisons are done. The project has exhausted the empirical alternatives to the null. Week 10 pivots fully to writing: Methods section (deferred from W7.8/W9.8), Results section (all figures are already saved), first pass on Introduction and Discussion. The report has a robust experimental result and a mechanistically defensible interpretation ready to be written up.
+
+## Week 10 — Higher-resolution GO test, strengthening pass, and report writing
+
+### 2026-07-27 — W10.1: Higher-resolution GO factorial
+
+Motivation. The null in W6–W9 was demonstrated at GO Slim resolution. A reviewer could reasonably object that Slim is too coarse to carry the mechanistic content that would help d2o prediction. Even with the triple-robustness null across pooling scales, PLM families, and classifiers, the finding could still be a coarseness artifact of the specific GO representation. So I added one more robustness test: rerun the disorder-pool factorial with GO encoded at full-term resolution with ancestor propagation.
+
+**Encoding.** For each protein's experimental GO annotations, I walked each annotation up the ontology through `is_a` and `part_of` relations to include all ancestors, then encoded the resulting set as a multi-hot binary vector per sub-ontology. Vocabulary filter kept terms appearing in ≥5 and ≤(n−5) proteins.
+
+- BP: **1,950 terms** (vs 65 in Slim, ~30× more resolution)
+- MF: **618 terms** (vs 82)
+- CC: **329 terms** (vs 61)
+
+**Result.** 8-condition factorial at disorder-pool scale, GroupKFold(5), Random Forest, seed 42, BH correction across 7 pairwise contrasts.
+
+| Condition | AUPRC | Δ vs C0 | BH-adj p |
+|---|---|---|---|
+| C0 baseline | 0.234 | — | — |
+| C1 +BP | **0.250** | **+0.016** | 0.583 |
+| C2 +MF | 0.233 | −0.001 | 0.594 |
+| C3 +CC | 0.238 | +0.003 | 0.583 |
+| C4 +BP+MF | 0.245 | +0.010 | 0.365 |
+| C5 +BP+CC | 0.246 | +0.012 | 0.365 |
+| C6 +MF+CC | 0.243 | +0.009 | 0.365 |
+| C7 full | 0.243 | +0.009 | 0.383 |
+
+No condition survives BH correction. But the BP main effect (+0.016) is ~8× larger than at Slim resolution and would have looked like an "underpowered positive" if reported without further checks.
+
+### 2026-07-27 — W10.2: Pre-registered strengthening pass
+
+Before writing the +0.016 up as suggestive, I ran four pre-registered checks. Decision rules: (a) strong finding if bootstrap CI lower bound > 0 AND scrambled control < real − 0.005 AND ≥80% of seeds positive; (b) weak/suggestive if any two conditions fail; (c) drop the claim if the scrambled control matches real or the CI clearly straddles zero.
+
+**Check 1 — Bootstrap 95% CI on the mean paired difference.** Per-fold diffs: [+0.091, −0.012, +0.008, +0.004, −0.010]. Fold 1 alone carries the mean. Bootstrap 95% CI = **[−0.008, +0.054]**. 74.9% of resamples positive. CI crosses zero.
+
+**Check 2 — Scrambled-BP negative control.** Randomly permuted the protein-to-BP-annotation mapping to break any real correspondence. Reran the factorial with the same CV splits. Scrambled control lift = **+0.009** vs real +0.016. Only +0.007 of the effect is genuinely BP-annotation-specific. Roughly 55% of the apparent lift is Random Forest hedging on the extra 1,950 binary features.
+
+**Check 3 — Top-20 BP full-term features by permutation importance.** Compared with Slim top-15 (RNA binding, DNA binding, transcription regulation, nucleus — all IDP-mechanism specific), the full-term top-20 is dominated by ancestor-inherited generic terms: regulation of primary metabolic process (GO:0080090), positive regulation of biological process (GO:0048518), signaling (GO:0023052), response to stimulus (GO:0050896), macromolecule metabolic process (GO:0043170). No mechanism specificity, consistent with dimensionality-hedging.
+
+**Check 4 — Stability across 9 (RF seed × CV shuffle seed) combinations.** Point estimates ranged [+0.003, +0.016] with **mean +0.009 and SD 0.004**. The original +0.016 was the single luckiest configuration. The stable lift matches the scrambled control almost exactly.
+
+**Decision.** All four checks land under rule (c). The +0.016 does not survive strengthening. **The null generalises across GO resolution too** — modern PLM embeddings subsume the discriminative content of both GO Slim and full-term ancestor-propagated GO for this task. Report as a *confirmed non-rescue*, not a positive finding.
+
+### W10.3 — Consolidated evidentiary breadth
+
+The null now covers two levels of GO resolution (Slim, full-term ancestor-propagated), three prediction scales (whole-protein, disorder-region, per-region), two PLM families (ESM-2, ProstT5), and two classifier families (Random Forest, XGBoost). Combined with the 99.7% / 0.3% permutation importance split and the biological coherence of the Slim top-15, this makes the mechanistic reading ("PLMs already contain what GO Slim carries") the most defensible interpretation. The scrambled-annotation control from W10.2 adds a new methodological piece: it separates dimensionality-driven hedging from annotation-specific signal, which is a reusable negative-control template for future studies in this area.
+
+### W10.4 — Report writing
+
+- Methods (§2.1–2.11) drafted first.
+- Results (§3.1–3.9) built around four figures from `notebooks/18_generate_figures.py`.
+- Discussion (§4.1–4.10) drafted last so framing matched the actual finding.
+- Introduction and Abstract written after everything else.
+- Voice pass done to move the writing toward undergrad first-person style; em-dashes and "not X but Y" constructions cut.
+- Aggressive shortening pass brought the report from 49 pages to 27.
+- Table of Contents inserted with actual page numbers verified against the rendered PDF.
+
+### Files saved this week
+
+- `notebooks/16_full_go_factorial.py` — higher-resolution GO factorial
+- `notebooks/17_bp_resolution_strengthening.py` — four strengthening checks
+- `notebooks/18_generate_figures.py` — produces the four report figures
+- `data/results_16_full_go.csv` — per-fold Week 10 factorial output
+- `report/figures/figure1_importance_split.png` through `figure4_strengthening_pass.png`
+- `report/v3_*.md` — final report sources
+- `report/v3_appendices.md` Appendix D covers the Week 10 experiment and strengthening pass in full
+
+### Status: report ready
+
+Report is 27 pages, embedded figures, populated TOC, full references. Repo cleaned (weekly plans, intermediate drafts, and scratch files removed). Waiting only on the GitHub push URL to fill the "Availability of data and code" line on the title page, and on supervisor sign-off before submitting to Nancy Nelson by Monday August 17.

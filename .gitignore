@@ -1,6 +1,14 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+
+# All data files (regenerate from notebooks or download from source)
 data/*
 !data/.gitkeep
-*.pkl
-.ipynb_checkpoints/
-.DS_Store
-results/figures/*.png
